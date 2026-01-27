@@ -182,8 +182,12 @@ private var api: osr_plugin_api = {
     let manifest = """
       {
         "plugin_id": "osaurus.emacs",
-        "version": "0.1.0",
+        "name": "Emacs",
         "description": "Execute Emacs Lisp code in a running Emacs instance",
+        "license": "MIT",
+        "authors": ["Dinoki Labs"],
+        "min_macos": "13.0",
+        "min_osaurus": "0.5.0",
         "capabilities": {
           "tools": [
             {
