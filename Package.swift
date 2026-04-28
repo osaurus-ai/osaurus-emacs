@@ -11,6 +11,11 @@ let package = Package(
         .target(
             name: "Emacs",
             path: "Sources/Emacs"
+        ),
+        .testTarget(
+            name: "EmacsTests",
+            dependencies: ["Emacs"],
+            path: "Tests/EmacsTests"
         )
     ]
 )

@@ -4,6 +4,8 @@ import Foundation
 private struct ExecuteElispTool {
   let name = "execute_emacs_lisp_code"
   let description = "Execute Emacs Lisp code in a running Emacs instance via emacsclient"
+  private let timeoutSeconds: TimeInterval = 10
+  private let maxOutputBytes = 65_536
 
   struct Args: Decodable {
     let code: String
@@ -82,14 +84,22 @@ private struct ExecuteElispTool {
     process.standardError = stderrPipe
 
     do {
+      let group = DispatchGroup()
+      group.enter()
+      process.terminationHandler = { _ in group.leave() }
       try process.run()
-      process.waitUntilExit()
+
+      if group.wait(timeout: .now() + timeoutSeconds) == .timedOut {
+        process.terminate()
+        _ = group.wait(timeout: .now() + 1)
+        return jsonError("emacsclient timed out after \(Int(timeoutSeconds)) seconds")
+      }
 
       let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
       let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
 
-      let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-      let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+      let stdout = boundedString(stdoutData)
+      let stderr = boundedString(stderrData)
 
       if process.terminationStatus != 0 {
         let errorMessage =
@@ -101,6 +111,15 @@ private struct ExecuteElispTool {
     } catch {
       return jsonError("Failed to execute emacsclient: \(error.localizedDescription)")
     }
+  }
+
+  private func boundedString(_ data: Data) -> String {
+    guard data.count > maxOutputBytes else {
+      return String(data: data, encoding: .utf8) ?? ""
+    }
+    let prefix = data.prefix(maxOutputBytes)
+    let value = String(data: prefix, encoding: .utf8) ?? ""
+    return value + "\n[truncated after \(maxOutputBytes) bytes]"
   }
 
   private func jsonError(_ message: String) -> String {
