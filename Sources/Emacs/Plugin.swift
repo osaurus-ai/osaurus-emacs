@@ -1,12 +1,52 @@
 import Foundation
 
+// MARK: - Manifest
+
+// Manifest JSON matching the Osaurus plugin spec. Kept at file scope so it can
+// be referenced from the C ABI surface and exercised in tests.
+let emacsManifestJSON = """
+  {
+    "plugin_id": "osaurus.emacs",
+    "name": "Emacs",
+    "description": "Execute Emacs Lisp code in a running Emacs instance",
+    "license": "MIT",
+    "authors": ["Dinoki Labs"],
+    "min_macos": "13.0",
+    "min_osaurus": "0.5.0",
+    "capabilities": {
+      "tools": [
+        {
+          "id": "execute_emacs_lisp_code",
+          "description": "Execute Emacs Lisp code in a running Emacs instance via emacsclient. Requires Emacs server to be running (M-x server-start).",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "The Emacs Lisp code to execute"
+              },
+              "emacsclient_path": {
+                "type": "string",
+                "description": "Optional path to emacsclient binary. Auto-detected if not provided."
+              }
+            },
+            "required": ["code"]
+          },
+          "requirements": [],
+          "permission_policy": "ask"
+        }
+      ]
+    }
+  }
+  """
+
 // MARK: - Emacs Tool Implementation
-private struct ExecuteElispTool {
+struct ExecuteElispTool {
   let name = "execute_emacs_lisp_code"
   let description = "Execute Emacs Lisp code in a running Emacs instance via emacsclient"
 
   struct Args: Decodable {
-    let code: String
+    let code: String?
     let emacsclient_path: String?
   }
 
@@ -14,17 +54,23 @@ private struct ExecuteElispTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments: expected 'code' field")
+      return Envelope.failure(.invalidArgs, "Invalid arguments: expected a JSON object with a 'code' field")
+    }
+
+    guard let code = input.code, !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    else {
+      return Envelope.failure(.invalidArgs, "Missing or empty 'code' argument")
     }
 
     let emacsclientPath = input.emacsclient_path ?? findEmacsclient()
 
     guard let path = emacsclientPath else {
-      return jsonError(
-        "Could not find emacsclient. Please provide emacsclient_path or ensure it's in PATH.")
+      return Envelope.failure(
+        .unavailable,
+        "Could not find emacsclient. Install Emacs and ensure emacsclient is in PATH, or provide 'emacsclient_path'.")
     }
 
-    return executeElisp(code: input.code, emacsclientPath: path)
+    return executeElisp(code: code, emacsclientPath: path)
   }
 
   private func findEmacsclient() -> String? {
@@ -92,24 +138,39 @@ private struct ExecuteElispTool {
       let stderr = String(data: stderrData, encoding: .utf8) ?? ""
 
       if process.terminationStatus != 0 {
+        let trimmedStderr = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if Self.isServerUnavailable(stderr: trimmedStderr) {
+          let detail = trimmedStderr.isEmpty ? "" : ": \(trimmedStderr)"
+          return Envelope.failure(
+            .unavailable,
+            "Emacs server is not running. Start it with M-x server-start (or add (server-start) to your init file)\(detail)")
+        }
         let errorMessage =
-          stderr.isEmpty ? "emacsclient exited with code \(process.terminationStatus)" : stderr
-        return jsonError(errorMessage.trimmingCharacters(in: .whitespacesAndNewlines))
+          trimmedStderr.isEmpty
+          ? "emacsclient exited with code \(process.terminationStatus)" : trimmedStderr
+        return Envelope.failure(.executionError, errorMessage)
       }
 
       return jsonResult(stdout.trimmingCharacters(in: .whitespacesAndNewlines))
     } catch {
-      return jsonError("Failed to execute emacsclient: \(error.localizedDescription)")
+      // Launching emacsclient failed (e.g. binary missing or not executable).
+      return Envelope.failure(
+        .unavailable, "Failed to launch emacsclient: \(error.localizedDescription)")
     }
   }
 
-  private func jsonError(_ message: String) -> String {
-    let escaped =
-      message
-      .replacingOccurrences(of: "\\", with: "\\\\")
-      .replacingOccurrences(of: "\"", with: "\\\"")
-      .replacingOccurrences(of: "\n", with: "\\n")
-    return "{\"error\": \"\(escaped)\"}"
+  // Detects the common emacsclient stderr messages that indicate the Emacs
+  // server/daemon is not running (as opposed to a genuine lisp error).
+  static func isServerUnavailable(stderr: String) -> Bool {
+    let lower = stderr.lowercased()
+    let markers = [
+      "can't find socket",
+      "no socket or alternate editor",
+      "connection refused",
+      "server is not running",
+      "no such file or directory",
+    ]
+    return markers.contains { lower.contains($0) }
   }
 
   private func jsonResult(_ result: String) -> String {
@@ -178,43 +239,7 @@ private var api: osr_plugin_api = {
   }
 
   api.get_manifest = { ctxPtr in
-    // Manifest JSON matching new spec
-    let manifest = """
-      {
-        "plugin_id": "osaurus.emacs",
-        "name": "Emacs",
-        "description": "Execute Emacs Lisp code in a running Emacs instance",
-        "license": "MIT",
-        "authors": ["Dinoki Labs"],
-        "min_macos": "13.0",
-        "min_osaurus": "0.5.0",
-        "capabilities": {
-          "tools": [
-            {
-              "id": "execute_emacs_lisp_code",
-              "description": "Execute Emacs Lisp code in a running Emacs instance via emacsclient. Requires Emacs server to be running (M-x server-start).",
-              "parameters": {
-                "type": "object",
-                "properties": {
-                  "code": {
-                    "type": "string",
-                    "description": "The Emacs Lisp code to execute"
-                  },
-                  "emacsclient_path": {
-                    "type": "string",
-                    "description": "Optional path to emacsclient binary. Auto-detected if not provided."
-                  }
-                },
-                "required": ["code"]
-              },
-              "requirements": [],
-              "permission_policy": "ask"
-            }
-          ]
-        }
-      }
-      """
-    return makeCString(manifest)
+    return makeCString(emacsManifestJSON)
   }
 
   api.invoke = { ctxPtr, typePtr, idPtr, payloadPtr in
@@ -234,7 +259,8 @@ private var api: osr_plugin_api = {
       return makeCString(result)
     }
 
-    return makeCString("{\"error\": \"Unknown capability\"}")
+    return makeCString(
+      Envelope.failure(.notFound, "Unknown capability: type=\(type) id=\(id)"))
   }
 
   return api
