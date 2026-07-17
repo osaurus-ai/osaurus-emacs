@@ -27,7 +27,7 @@ let emacsManifestJSON = """
               },
               "emacsclient_path": {
                 "type": "string",
-                "description": "Optional path to emacsclient binary. Auto-detected if not provided."
+                "description": "Optional absolute path to the emacsclient binary; it must be an existing executable file named 'emacsclient'. Auto-detected if not provided."
               }
             },
             "required": ["code"]
@@ -63,6 +63,12 @@ struct ExecuteElispTool {
       return Envelope.failure(.invalidArgs, "Missing or empty 'code' argument")
     }
 
+    if let userPath = input.emacsclient_path {
+      if let problem = Self.validateEmacsclientPath(userPath) {
+        return Envelope.failure(.invalidArgs, problem)
+      }
+    }
+
     let emacsclientPath = input.emacsclient_path ?? findEmacsclient()
 
     guard let path = emacsclientPath else {
@@ -72,6 +78,30 @@ struct ExecuteElispTool {
     }
 
     return executeElisp(code: code, emacsclientPath: path)
+  }
+
+  // Policy: a caller-supplied emacsclient_path is only accepted when it is an
+  // absolute path to an existing executable regular file whose basename is
+  // exactly `emacsclient`. Anything else is rejected as invalid_args so the
+  // tool cannot be pointed at arbitrary executables.
+  static func validateEmacsclientPath(_ path: String) -> String? {
+    guard path.hasPrefix("/") else {
+      return "emacsclient_path must be an absolute path"
+    }
+    guard URL(fileURLWithPath: path).lastPathComponent == "emacsclient" else {
+      return "emacsclient_path must point to a binary named 'emacsclient'"
+    }
+    let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    guard
+      let type = (try? FileManager.default.attributesOfItem(atPath: resolved))?[.type]
+        as? FileAttributeType, type == .typeRegular
+    else {
+      return "emacsclient_path does not exist or is not a regular file"
+    }
+    guard FileManager.default.isExecutableFile(atPath: resolved) else {
+      return "emacsclient_path is not executable"
+    }
+    return nil
   }
 
   private func findEmacsclient() -> String? {
