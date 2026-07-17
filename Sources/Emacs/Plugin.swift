@@ -8,6 +8,7 @@ let emacsManifestJSON = """
   {
     "plugin_id": "osaurus.emacs",
     "name": "Emacs",
+    "version": "1.0.3",
     "description": "Execute Emacs Lisp code in a running Emacs instance",
     "license": "MIT",
     "authors": ["Dinoki Labs"],
