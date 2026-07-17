@@ -1,4 +1,5 @@
 import Foundation
+import OsaurusPluginABI
 import OsaurusPluginKit
 
 // MARK: - Manifest
@@ -189,64 +190,27 @@ struct ExecuteElispTool {
 
 // MARK: - C ABI surface
 
-// Opaque context
-private typealias osr_plugin_ctx_t = UnsafeMutableRawPointer
-
-// Function pointers
-private typealias osr_free_string_t = @convention(c) (UnsafePointer<CChar>?) -> Void
-private typealias osr_init_t = @convention(c) () -> osr_plugin_ctx_t?
-private typealias osr_destroy_t = @convention(c) (osr_plugin_ctx_t?) -> Void
-private typealias osr_get_manifest_t = @convention(c) (osr_plugin_ctx_t?) -> UnsafePointer<CChar>?
-private typealias osr_invoke_t =
-  @convention(c) (
-    osr_plugin_ctx_t?,
-    UnsafePointer<CChar>?,  // type
-    UnsafePointer<CChar>?,  // id
-    UnsafePointer<CChar>?  // payload
-  ) -> UnsafePointer<CChar>?
-
-private struct osr_plugin_api {
-  var free_string: osr_free_string_t?
-  var `init`: osr_init_t?
-  var destroy: osr_destroy_t?
-  var get_manifest: osr_get_manifest_t?
-  var invoke: osr_invoke_t?
-}
-
 // Context state (simple wrapper class to hold state)
 private class PluginContext {
   let tool = ExecuteElispTool()
 }
 
-// Helper to return C strings
-private func makeCString(_ s: String) -> UnsafePointer<CChar>? {
-  guard let ptr = strdup(s) else { return nil }
-  return UnsafePointer(ptr)
-}
-
-// API Implementation
-private var api: osr_plugin_api = {
-  var api = osr_plugin_api()
-
-  api.free_string = { ptr in
-    if let p = ptr { free(UnsafeMutableRawPointer(mutating: p)) }
-  }
-
-  api.`init` = {
+// Plugin API table, assembled by the SDK. Stable file-scope storage — the
+// host keeps the pointer returned from the entry points.
+nonisolated(unsafe) private var pluginAPI = PluginEntry.makeAPI(
+  version: OsrABIVersion.v2,
+  init: {
     let ctx = PluginContext()
     return Unmanaged.passRetained(ctx).toOpaque()
-  }
-
-  api.destroy = { ctxPtr in
+  },
+  destroy: { ctxPtr in
     guard let ctxPtr = ctxPtr else { return }
     Unmanaged<PluginContext>.fromOpaque(ctxPtr).release()
-  }
-
-  api.get_manifest = { ctxPtr in
-    return makeCString(emacsManifestJSON)
-  }
-
-  api.invoke = { ctxPtr, typePtr, idPtr, payloadPtr in
+  },
+  getManifest: { ctxPtr in
+    return osrMakeCString(emacsManifestJSON)
+  },
+  invoke: { ctxPtr, typePtr, idPtr, payloadPtr in
     guard let ctxPtr = ctxPtr,
       let typePtr = typePtr,
       let idPtr = idPtr,
@@ -260,17 +224,23 @@ private var api: osr_plugin_api = {
 
     if type == "tool" && id == ctx.tool.name {
       let result = ctx.tool.run(args: payload)
-      return makeCString(result)
+      return osrMakeCString(result)
     }
 
-    return makeCString(
+    return osrMakeCString(
       Envelope.failure(.notFound, "Unknown capability: type=\(type) id=\(id)"))
   }
+)
 
-  return api
-}()
+// ABI v2 entry: the host injects its API table, captured into
+// `HostBridge.shared`. Tried first by v2-aware hosts.
+@_cdecl("osaurus_plugin_entry_v2")
+public func osaurus_plugin_entry_v2(_ host: UnsafeRawPointer?) -> UnsafeRawPointer? {
+  return PluginEntry.enterV2(host, api: &pluginAPI)
+}
 
+// Legacy ABI v1 entry: old hosts fall back to this symbol (no host API).
 @_cdecl("osaurus_plugin_entry")
 public func osaurus_plugin_entry() -> UnsafeRawPointer? {
-  return UnsafeRawPointer(&api)
+  return PluginEntry.enterV1(api: &pluginAPI)
 }

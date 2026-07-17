@@ -14,7 +14,8 @@ let package = Package(
         .target(
             name: "Emacs",
             dependencies: [
-                .product(name: "OsaurusPluginKit", package: "osaurus-plugin-sdk")
+                .product(name: "OsaurusPluginABI", package: "osaurus-plugin-sdk"),
+                .product(name: "OsaurusPluginKit", package: "osaurus-plugin-sdk"),
             ],
             path: "Sources/Emacs"
         ),
