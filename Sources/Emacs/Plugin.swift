@@ -1,4 +1,5 @@
 import Foundation
+import OsaurusPluginKit
 
 // MARK: - Manifest
 
@@ -47,34 +48,27 @@ struct ExecuteElispTool {
   let description = "Execute Emacs Lisp code in a running Emacs instance via emacsclient"
   var timeout: TimeInterval = 30
 
-  struct Args: Decodable {
-    let code: String?
-    let emacsclient_path: String?
-  }
-
   func run(args: String) -> String {
-    guard let data = args.data(using: .utf8),
-      let input = try? JSONDecoder().decode(Args.self, from: data)
-    else {
-      return Envelope.failure(.invalidArgs, "Invalid arguments: expected a JSON object with a 'code' field")
+    let code: String
+    let userPath: String?
+    do {
+      let input = try ArgValidation.parseObject(args)
+      code = try ArgValidation.requireString(input, "code")
+      userPath = try ArgValidation.optionalString(input, "emacsclient_path")
+    } catch let failure as EnvelopeFailure {
+      return failure.render()
+    } catch {
+      return Envelope.failure(.invalidArgs, "Invalid arguments: \(error.localizedDescription)")
     }
 
-    guard let code = input.code, !code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-    else {
-      return Envelope.failure(.invalidArgs, "Missing or empty 'code' argument")
-    }
-
-    if let userPath = input.emacsclient_path {
+    if let userPath {
       if let problem = Self.validateEmacsclientPath(userPath) {
         return Envelope.failure(.invalidArgs, problem)
       }
     }
 
-    let emacsclientPath = input.emacsclient_path ?? findEmacsclient()
-
-    guard let path = emacsclientPath else {
-      return Envelope.failure(
-        .unavailable,
+    guard let path = userPath ?? findEmacsclient() else {
+      return Envelope.unavailable(
         "Could not find emacsclient. Install Emacs and ensure emacsclient is in PATH, or provide 'emacsclient_path'.")
     }
 
@@ -142,8 +136,7 @@ struct ExecuteElispTool {
         executable: emacsclientPath, arguments: ["--eval", code], timeout: timeout)
     } catch {
       // Launching emacsclient failed (e.g. binary missing or not executable).
-      return Envelope.failure(
-        .unavailable, "Failed to launch emacsclient: \(error.localizedDescription)")
+      return Envelope.unavailable("Failed to launch emacsclient: \(error.localizedDescription)")
     }
 
     if output.timedOut {
@@ -158,8 +151,7 @@ struct ExecuteElispTool {
       let trimmedStderr = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
       if Self.isServerUnavailable(stderr: trimmedStderr) {
         let detail = trimmedStderr.isEmpty ? "" : ": \(trimmedStderr)"
-        return Envelope.failure(
-          .unavailable,
+        return Envelope.unavailable(
           "Emacs server is not running. Start it with M-x server-start (or add (server-start) to your init file)\(detail)")
       }
       let errorMessage =

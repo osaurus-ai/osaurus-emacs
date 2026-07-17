@@ -1,3 +1,4 @@
+import OsaurusPluginKit
 import XCTest
 
 @testable import Emacs
@@ -55,7 +56,7 @@ final class EmacsTests: XCTestCase {
 
     XCTAssertFalse(try retryable(Envelope.failure(.invalidArgs, "x")))
     XCTAssertTrue(try retryable(Envelope.failure(.executionError, "x")))
-    XCTAssertTrue(try retryable(Envelope.failure(.unavailable, "x")))
+    XCTAssertTrue(try retryable(Envelope.unavailable("x")))
     XCTAssertFalse(try retryable(Envelope.failure(.notFound, "x")))
     XCTAssertTrue(try retryable(Envelope.failure(.timeout, "x")))
   }
