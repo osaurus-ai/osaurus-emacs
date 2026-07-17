@@ -6,6 +6,7 @@ enum Envelope {
         case executionError = "execution_error"
         case notFound = "not_found"
         case unavailable = "unavailable"
+        case timeout = "timeout"
     }
 
     static func failure(_ kind: Kind, _ message: String, retryable: Bool? = nil) -> String {
@@ -17,8 +18,8 @@ enum Envelope {
 
     private static func defaultRetryable(for kind: Kind) -> Bool {
         switch kind {
-        case .invalidArgs, .executionError, .unavailable: return true
-        case .notFound: return false
+        case .executionError, .unavailable, .timeout: return true
+        case .invalidArgs, .notFound: return false
         }
     }
 
