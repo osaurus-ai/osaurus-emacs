@@ -44,6 +44,7 @@ let emacsManifestJSON = """
 struct ExecuteElispTool {
   let name = "execute_emacs_lisp_code"
   let description = "Execute Emacs Lisp code in a running Emacs instance via emacsclient"
+  var timeout: TimeInterval = 30
 
   struct Args: Decodable {
     let code: String?
@@ -89,74 +90,54 @@ struct ExecuteElispTool {
     }
 
     // Try to find via which command
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/which")
-    process.arguments = ["emacsclient"]
-
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = FileHandle.nullDevice
-
-    do {
-      try process.run()
-      process.waitUntilExit()
-
-      if process.terminationStatus == 0 {
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        if let path = String(data: data, encoding: .utf8)?.trimmingCharacters(
-          in: .whitespacesAndNewlines),
-          !path.isEmpty
-        {
-          return path
-        }
+    if let output = try? ProcessRunner.run(
+      executable: "/usr/bin/which", arguments: ["emacsclient"], timeout: 5),
+      !output.timedOut, output.exitStatus == 0
+    {
+      let path = String(decoding: output.stdout, as: UTF8.self)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+      if !path.isEmpty {
+        return path
       }
-    } catch {
-      // Ignore errors
     }
 
     return nil
   }
 
   private func executeElisp(code: String, emacsclientPath: String) -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: emacsclientPath)
-    process.arguments = ["--eval", code]
-
-    let stdoutPipe = Pipe()
-    let stderrPipe = Pipe()
-    process.standardOutput = stdoutPipe
-    process.standardError = stderrPipe
-
+    let output: ProcessRunner.Output
     do {
-      try process.run()
-      process.waitUntilExit()
-
-      let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-      let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-
-      let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-      let stderr = String(data: stderrData, encoding: .utf8) ?? ""
-
-      if process.terminationStatus != 0 {
-        let trimmedStderr = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        if Self.isServerUnavailable(stderr: trimmedStderr) {
-          let detail = trimmedStderr.isEmpty ? "" : ": \(trimmedStderr)"
-          return Envelope.failure(
-            .unavailable,
-            "Emacs server is not running. Start it with M-x server-start (or add (server-start) to your init file)\(detail)")
-        }
-        let errorMessage =
-          trimmedStderr.isEmpty
-          ? "emacsclient exited with code \(process.terminationStatus)" : trimmedStderr
-        return Envelope.failure(.executionError, errorMessage)
-      }
-
-      return jsonResult(stdout.trimmingCharacters(in: .whitespacesAndNewlines))
+      output = try ProcessRunner.run(
+        executable: emacsclientPath, arguments: ["--eval", code], timeout: timeout)
     } catch {
       // Launching emacsclient failed (e.g. binary missing or not executable).
       return Envelope.failure(
         .unavailable, "Failed to launch emacsclient: \(error.localizedDescription)")
     }
+
+    if output.timedOut {
+      return Envelope.failure(
+        .timeout, "emacsclient timed out after \(Int(timeout))s and was terminated")
+    }
+
+    let stdout = String(decoding: output.stdout, as: UTF8.self)
+    let stderr = String(decoding: output.stderr, as: UTF8.self)
+
+    if output.exitStatus != 0 {
+      let trimmedStderr = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+      if Self.isServerUnavailable(stderr: trimmedStderr) {
+        let detail = trimmedStderr.isEmpty ? "" : ": \(trimmedStderr)"
+        return Envelope.failure(
+          .unavailable,
+          "Emacs server is not running. Start it with M-x server-start (or add (server-start) to your init file)\(detail)")
+      }
+      let errorMessage =
+        trimmedStderr.isEmpty
+        ? "emacsclient exited with code \(output.exitStatus)" : trimmedStderr
+      return Envelope.failure(.executionError, errorMessage)
+    }
+
+    return jsonResult(stdout.trimmingCharacters(in: .whitespacesAndNewlines))
   }
 
   // Detects the common emacsclient stderr messages that indicate the Emacs
