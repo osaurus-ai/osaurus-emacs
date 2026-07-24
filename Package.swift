@@ -7,14 +7,25 @@ let package = Package(
     products: [
         .library(name: "Emacs", type: .dynamic, targets: ["Emacs"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/osaurus-ai/osaurus-plugin-sdk.git", exact: "1.0.0")
+    ],
     targets: [
         .target(
             name: "Emacs",
+            dependencies: [
+                .product(name: "OsaurusPluginABI", package: "osaurus-plugin-sdk"),
+                .product(name: "OsaurusPluginKit", package: "osaurus-plugin-sdk"),
+            ],
             path: "Sources/Emacs"
         ),
         .testTarget(
             name: "EmacsTests",
-            dependencies: ["Emacs"],
+            dependencies: [
+                "Emacs",
+                .product(name: "OsaurusPluginKit", package: "osaurus-plugin-sdk"),
+                .product(name: "OsaurusPluginTestSupport", package: "osaurus-plugin-sdk"),
+            ],
             path: "Tests/EmacsTests"
         )
     ]
