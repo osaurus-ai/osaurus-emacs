@@ -30,7 +30,7 @@ final class EmacsTests: XCTestCase {
     let data = Data(emacsManifestJSON.utf8)
     let root = try JSONSerialization.jsonObject(with: data) as? [String: Any]
     let manifest = try XCTUnwrap(root)
-    XCTAssertEqual(manifest["version"] as? String, "1.0.3")
+    XCTAssertEqual(manifest["version"] as? String, "1.1.0")
   }
 
   // MARK: - Envelope
